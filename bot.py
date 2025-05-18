@@ -22,6 +22,31 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
+import logging.handlers
+
+# --- Logging Setup Start ---
+# Get root logger
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+
+# Create a formatter
+formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+
+# Create console handler
+ch = logging.StreamHandler()
+ch.setLevel(logging.INFO)
+ch.setFormatter(formatter)
+root_logger.addHandler(ch)
+
+# Determine the root directory for the log file (directory of bot.py)
+root_dir = os.path.dirname(os.path.abspath(__file__))
+
+# Create file handler
+fh = logging.FileHandler(os.path.join(root_dir, "app.log"))
+fh.setLevel(logging.INFO)
+fh.setFormatter(formatter)
+root_logger.addHandler(fh)
+# --- Logging Setup End ---
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
@@ -190,7 +215,7 @@ class Database:
                     cls._instance._initialized = False
         return cls._instance
 
-    def __init__(self, path: str = "db.json"):
+    def __init__(self, path: str = os.path.join(root_dir, "db.json")):
         if self._initialized:
             return
         self._initialized = True
@@ -468,15 +493,31 @@ async def logic_rebalance(portfolio_index: int, send_message, user_id: int):
 
     logger.info(f"Rebalancing portfolio {data.portfolios[portfolio_index].name} for user {user_id}")
 
+    deltas = []
     for i, _ in enumerate(data.portfolios[portfolio_index].assets):
         data.portfolios[portfolio_index].assets[i].shares += (
             data.portfolios[portfolio_index].assets[i].rebalance_delta_shares
         )
+
+        deltas.append(
+            (
+                data.portfolios[portfolio_index].assets[i].alias,
+                data.portfolios[portfolio_index].assets[i].rebalance_delta_amount,
+                data.portfolios[portfolio_index].assets[i].rebalance_delta_shares,
+            )
+        )
+
         data.portfolios[portfolio_index].assets[i].rebalance_delta_amount = 0
         data.portfolios[portfolio_index].assets[i].rebalance_delta_shares = 0
 
+    text = f"⚖️ *Executed rebalance for {data.portfolios[portfolio_index].name}*\n"
+    deltas = sorted(deltas, key=lambda x: x[1])
+    for alias, delta_amount, delta_shares in deltas:
+        prefix = "🟢 Bought" if delta_amount > 0 else "🔴 Sold"
+        text += f"{prefix} {abs(delta_amount):.2f}€ ({abs(delta_shares):.2f} shares) of {alias}\n"
+    await send_message(user_id, text, parse_mode="Markdown")
+
     db.set_data(user_id, data)
-    await send_message(user_id, f"Rebalance executed for *{data.portfolios[portfolio_index].name}*")
 
 
 async def logic_update(update_date: datetime.date, send_message, specific_user_id: int | None = None):
